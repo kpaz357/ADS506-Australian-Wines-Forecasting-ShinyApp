@@ -1,0 +1,230 @@
+---
+title: "R app"
+output: html_document
+date: "2025-11-25"
+---
+
+# Load Libraries
+
+```{r setup, include=FALSE}
+library(shiny)
+library(bslib)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(ggplot2)
+library(DT)
+library(readr)
+library(urca)
+```
+
+# Load & Wrangle
+
+```{r}
+# load data 
+wines_raw <- read_csv("AustralianWines.csv")
+```
+
+```{r}
+colnames(wines_raw)
+```
+
+```{r}
+# check coluumns
+sapply(wines_raw[-1], function(x) sum(is.na(as.numeric(x))))
+
+```
+
+```{r}
+glimpse(wines_raw)
+```
+
+```{r}
+# fix month + rose
+wines_clean <- wines_raw %>%
+  mutate(
+    Month = yearmonth(my(Month)),  # "Jan-80" → 1980 Jan yearmonth
+    Rose  = as.numeric(Rose)       # force Rose to numeric (2 bad values → NA)
+  )
+```
+
+```{r}
+# convert tsibble
+wines_long <- wines_clean %>%
+  pivot_longer(
+    cols = -Month,
+    names_to = "Varietal",
+    values_to = "Sales"
+  ) %>%
+  as_tsibble(index = Month, key = Varietal)
+```
+
+# Split for Training + Validation
+
+```{r}
+# Extract ordered Month index from the tsibble
+idx <- wines_long %>%
+  distinct(Month) %>%      # unique months
+  arrange(Month) %>%       # sort chronologically
+  pull(Month)
+```
+
+```{r}
+# training porportion (80%)
+train_prop <- 0.8
+```
+
+```{r}
+# Find cutoff position 
+pos <- floor(length(idx) * train_prop)
+train_end <- idx[pos]      
+```
+
+```{r}
+# Determine the train_end Month
+train_end <- idx[pos]
+```
+
+```{r}
+# Create training set
+training <- wines_long %>%
+  dplyr::filter(Month <= train_end)
+```
+
+```{r}
+# Create validation set 
+validation <- wines_long %>%
+  dplyr::filter(Month > train_end)
+```
+
+```{r}
+# check
+training %>% head()
+validation %>% head()
+```
+
+# Models (TSLM/ETS/ARIMA)
+
+```{r}
+# remove rows qwith NA
+training_clean <- training %>%
+  filter(!is.na(Sales))
+
+# fit models
+wine_models <- training %>%
+  model(
+    TSLM  = TSLM(Sales ~ trend() + season()),
+    ETS   = ETS(Sales),
+    ARIMA = ARIMA(Sales)   
+  )
+
+wine_models
+```
+
+```{r}
+# summary
+model_glance <- wine_models %>%
+  glance()
+
+model_glance
+```
+
+# Forecasting
+
+```{r}
+# forecast horizon
+h <- 12   # 12 mtnha
+```
+
+```{r}
+# Forecast into future
+fc_future <- wine_models %>%
+  forecast(h = h)
+```
+
+```{r}
+# Forecast into Validation
+fc_valid <- wine_models %>%
+  forecast(new_data = validation)
+```
+
+```{r}
+# View
+fc_future
+fc_valid
+```
+
+# Visualizations
+
+```{r}
+# check for accuracy on training set
+acc_train <- wine_models %>%
+  accuracy()   
+
+acc_train
+```
+
+```{r}
+# check for accuracy on valiadation set
+acc_valid <- fc_valid %>%
+  accuracy(validation)
+
+acc_valid
+```
+
+# Visualization of Forecast Results 
+
+```{r}
+# overview plot
+p_overview <- wines_long %>%
+  autoplot(Sales) +
+  facet_wrap(vars(Varietal), scales = "free_y") +
+  labs(
+    title = "Australian Wine Sales by Varietal",
+    x = "Month",
+    y = "Sales (thousand liters)"
+  ) +
+  theme_minimal()
+
+p_overview
+```
+
+```{r}
+# FORECAST PLOT WITH INTERVAL RIBBONS
+p_forecast <- fc_future %>%
+  autoplot(wines_long, level = c(80, 95)) +   # 80% & 95% PI ribbons
+  facet_wrap(vars(Varietal), scales = "free_y") +
+  labs(
+    title = "TSLM vs ETS vs ARIMA Forecasts by Varietal",
+    x = "Month",
+    y = "Sales (thousand liters)",
+    colour = "Model"
+  ) +
+  theme_minimal()
+
+p_forecast
+```
+
+```{r}
+#
+start_valid <- min(validation$Month)
+
+p_valid <- fc_valid %>%
+  autoplot(
+    wines_long %>% dplyr::filter(Month >= start_valid),
+    level = c(80, 95)
+  ) +
+  facet_wrap(vars(Varietal), scales = "free_y") +
+  labs(
+    title = "Model Comparison on Validation Period",
+    x = "Month",
+    y = "Sales (thousand liters)",
+    colour = "Model"
+  ) +
+  theme_minimal()
+
+p_valid
+```
