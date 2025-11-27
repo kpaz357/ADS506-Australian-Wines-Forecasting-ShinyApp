@@ -8,7 +8,7 @@
 
 - Adjustable date range and training/validation split
 
-- User-defined forecast horizon (3–60 months)
+- User-defined forecast horizon 
 
 - Three forecasting models: TSLM, ETS, ARIMA
 
